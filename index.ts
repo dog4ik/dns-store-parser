@@ -6,6 +6,11 @@ import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import Papa from "papaparse";
 
+type ProductType = {
+  name: string;
+  price: string;
+};
+
 let logger = initLogger("trace");
 
 async function getMaxPages(page: Page) {
@@ -58,42 +63,39 @@ async function setupPage(page: Page) {
 async function getProducts(page: Page) {
   let productPriceSelector = "div.product-buy__price" as const;
   let productNameSelector = "a.catalog-product__name" as const;
+  let productContainerSelector = "div.catalog-product" as const;
 
+  let productsList: ProductType[] = [];
+
+  await page.waitForSelector(productContainerSelector);
   await page.waitForSelector(productPriceSelector);
 
-  let priceTags = await page
-    .$$(productPriceSelector)
-    .then((elements) =>
-      elements.map((handle) =>
-        handle.evaluate((el) => el.firstChild!.textContent!),
-      ),
-    );
+  let productContainers = await page.$$(productContainerSelector);
 
-  await page.waitForSelector(productNameSelector);
+  for (let container of productContainers) {
+    let nameTag = container
+      .$(productNameSelector)
+      .then((element) => element?.evaluate((el) => el.firstChild?.textContent));
 
-  let nameTags = await page
-    .$$(productNameSelector)
-    .then((elements) =>
-      elements.map((handle) =>
-        handle.evaluate((el) => el.firstChild!.textContent!),
-      ),
-    );
+    let priceTag = container
+      .$(productPriceSelector)
+      .then((element) => element?.evaluate((el) => el.firstChild?.textContent));
 
-  let prices = await Promise.all(priceTags);
-  let names = await Promise.all(nameTags);
+    let [name, price] = await Promise.all([nameTag, priceTag]);
 
-  // TODO: walk by 1 element
-  if (prices.length != names.length) {
-    logger.error("prices and names lengths dont match", {
-      prices: prices.length,
-      names: names.length,
-    });
+    if (!name) {
+      logger.warn("Skipping product, name selector failed");
+      continue;
+    }
+    if (!price) {
+      logger.warn("Skipping product, price selector failed");
+      continue;
+    }
+
+    productsList.push({ name, price });
   }
 
-  return names.map((name, idx) => ({
-    name,
-    price: prices[idx],
-  }));
+  return productsList;
 }
 
 function setPageParam(url: URL, page: number) {
@@ -136,9 +138,12 @@ async function main() {
     let currentPage = i + 1;
     if (config.startPage > currentPage) continue;
     setPageParam(url, currentPage);
+
     await page.goto(url.toString());
+
     logger.info("Getting products for page " + currentPage);
     let products = await getProducts(page);
+
     allProducts = [...allProducts, ...products];
   }
 
